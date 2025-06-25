@@ -8,7 +8,7 @@ WORKDIR /app
 COPY sync_script.py .
 COPY sync_posts_apify.py .
 COPY requirements.txt .
-COPY .env .
+
 
 # Installiere die Abhängigkeiten
 RUN pip install --no-cache-dir -r requirements.txt
