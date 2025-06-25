@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "**"
+
+jobs:
+  docker:
+    permissions: write-all
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # list of Docker images to use as base name for tags
+          images: ghcr.io/konsihdr/ffp_api            
+          # generate Docker tags based on the following events/attributes
+          tags: |
+            type=schedule
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Github Container Repo
+        uses: docker/login-action@v3
+        with:
+            registry: ghcr.io
+            username: ${{ github.repository_owner }}
+            password: ${{ github.token }}
+    
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ steps.meta.outputs.tags }}
+
+      - name: Call webhook if build was successful
+        run: |
+          curl -X POST https://workflow.hdr-it.de/webhook/38797081-5b75-4f60-8f3e-645335986816 \
+            -H "Content-Type: application/json" \
+            -d '{"status": "success", "message": "Docker build and push completed.", "container": "ffp_api"}'

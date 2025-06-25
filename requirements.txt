@@ -1,0 +1,4 @@
+icalendar==5.0.10
+requests==2.32.4
+pocketbase
+python-dotenv
