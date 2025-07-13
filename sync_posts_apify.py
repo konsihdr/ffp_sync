@@ -195,25 +195,30 @@ def update_display_urls():
             try:
                 short_code = post.get('shortCode', 'unknown')
                 image_file = post.get('image', '')
+                current_display_url = post.get('displayUrl', '')
                 
-                # Only process posts that have an image file uploaded
+                # Only process posts that have an image file uploaded and don't already have a PocketBase URL
                 if image_file and image_file.strip():
                     # Generate PocketBase file URL
                     pocketbase_url = f"{POCKETBASE_URL}/api/files/{post['collectionId']}/{post['id']}/{image_file}"
                     
-                    # Update the displayUrl field
-                    update_data = {'displayUrl': pocketbase_url}
-                    update_response = requests.patch(
-                        f"{POCKETBASE_URL}/api/collections/ffp_posts/records/{post['id']}",
-                        headers=headers,
-                        json=update_data
-                    )
-                    
-                    if update_response.status_code == 200:
-                        log_message("INFO", f"Updated displayUrl for {short_code}: {pocketbase_url}")
-                        updated_count += 1
+                    # Only update if displayUrl is not already a PocketBase URL
+                    if not current_display_url.startswith(POCKETBASE_URL):
+                        # Update the displayUrl field
+                        update_data = {'displayUrl': pocketbase_url}
+                        update_response = requests.patch(
+                            f"{POCKETBASE_URL}/api/collections/ffp_posts/records/{post['id']}",
+                            headers=headers,
+                            json=update_data
+                        )
+                        
+                        if update_response.status_code == 200:
+                            log_message("INFO", f"Updated displayUrl for {short_code}: {pocketbase_url}")
+                            updated_count += 1
+                        else:
+                            log_message("ERROR", f"Failed to update {short_code}: {update_response.text}")
                     else:
-                        log_message("ERROR", f"Failed to update {short_code}: {update_response.text}")
+                        log_message("INFO", f"DisplayUrl already updated for {short_code}")
                 else:
                     log_message("WARNING", f"No image file for post: {short_code}")
             except Exception as update_error:
