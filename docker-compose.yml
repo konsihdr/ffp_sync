@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  ffp-sync:
+    build: .
+    volumes:
+      # Mount logs directory to host for persistent logging
+      - ./logs:/app/logs
+    environment:
+      - APIFY_TOKEN=${APIFY_TOKEN}
+      - POCKETBASE_URL=${POCKETBASE_URL}
+      - POCKETBASE_EMAIL=${POCKETBASE_EMAIL}
+      - POCKETBASE_PASSWORD=${POCKETBASE_PASSWORD}
+    env_file:
+      - .env
+    restart: unless-stopped
+    # Run container once (remove if you want it to run continuously)
+    command: python3 -u sync_script.py
