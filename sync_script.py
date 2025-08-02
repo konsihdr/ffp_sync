@@ -43,7 +43,7 @@ def sync_events_to_pocketbase():
     """Sync calendar events to PocketBase"""
     events = get_calendar_events()
     if events is None:
-        print("Failed to fetch calendar events")
+        print("ERROR: Failed to fetch calendar events")
         return False
 
     try:
@@ -89,48 +89,48 @@ def sync_events_to_pocketbase():
                 })
                 created += 1
 
-        print(f"Successfully synced events to PocketBase: {created} created, {updated} updated")
+        print(f"INFO: Successfully synced events to PocketBase: {created} created, {updated} updated")
         return True
     except Exception as e:
-        print(f"Error syncing events to PocketBase: {e}")
+        print(f"ERROR: Error syncing events to PocketBase: {e}")
     return False
 
 def main():
     """Main sync function - runs both calendar and posts sync"""
-    print(f"Starting complete data sync to PocketBase at {datetime.now()}")
-    print("=" * 60)
+    print(f"INFO: Starting complete data sync to PocketBase at {datetime.now()}")
+    print("INFO: " + "=" * 60)
     
     # Authenticate with PocketBase if needed
     # pb.collection('users').auth_with_password(os.environ['POCKETBASE_EMAIL'], os.environ['POCKETBASE_PASSWORD'])
     
     # Sync calendar events
-    print("\n1. Syncing calendar events...")
+    print("INFO: 1. Syncing calendar events...")
     events_success = sync_events_to_pocketbase()
     
     # Sync posts from Apify
-    print("\n2. Syncing posts from Apify...")
+    print("INFO: 2. Syncing posts from Apify...")
     try:
         sync_posts_from_apify()
         posts_success = True
     except Exception as e:
-        print(f"Error running posts sync: {e}")
+        print(f"ERROR: Error running posts sync: {e}")
         posts_success = False
     
     # Summary
-    print("\n" + "=" * 60)
-    print("SYNC SUMMARY:")
-    print(f"Calendar Events: {'✓ SUCCESS' if events_success else '✗ FAILED'}")
-    print(f"Instagram Posts: {'✓ SUCCESS' if posts_success else '✗ FAILED'}")
+    print("INFO: " + "=" * 60)
+    print("INFO: SYNC SUMMARY:")
+    print(f"INFO: Calendar Events: {'✓ SUCCESS' if events_success else '✗ FAILED'}")
+    print(f"INFO: Instagram Posts: {'✓ SUCCESS' if posts_success else '✗ FAILED'}")
     
     if events_success and posts_success:
-        print("\n🎉 All data synced successfully!")
+        print("INFO: 🎉 All data synced successfully!")
     elif events_success or posts_success:
-        print("\n⚠️  Partial sync completed. Check logs above for errors.")
+        print("WARNING: ⚠️  Partial sync completed. Check logs above for errors.")
     else:
-        print("\n❌ All sync operations failed. Check logs above for errors.")
+        print("ERROR: ❌ All sync operations failed. Check logs above for errors.")
     
-    print(f"\nComplete sync finished at {datetime.now()}")
-    print("=" * 60)
+    print(f"INFO: Complete sync finished at {datetime.now()}")
+    print("INFO: " + "=" * 60)
 
 if __name__ == '__main__':
     main()

@@ -12,9 +12,6 @@ load_dotenv()
 POCKETBASE_URL = "https://base.hdr-it.de"
 pb = PocketBase(POCKETBASE_URL)
 
-def log_message(level, message):
-    """Log messages with timestamp"""
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [{level}] {message}")
 
 def create_post_with_image_http(post_data, image_data, filename):
     """Create post with image using direct HTTP request (workaround for SDK issue)"""
@@ -45,13 +42,30 @@ def create_post_with_image_http(post_data, image_data, filename):
         
         if create_response.status_code == 200:
             result = create_response.json()
-            log_message("INFO", f"Post created with ID: {result['id']}, image: {result.get('image', 'MISSING')}")
+            image_filename = result.get('image', '')
+                        
+            # Immediately update displayUrl with the correct PocketBase file URL
+            if image_filename:
+                display_url = f"{POCKETBASE_URL}/api/files/{result['collectionId']}/{result['id']}/{image_filename}"
+                update_data = {'displayUrl': display_url}
+                update_response = requests.patch(
+                    f"{POCKETBASE_URL}/api/collections/ffp_posts/records/{result['id']}",
+                    headers=headers,
+                    json=update_data
+                )
+                
+                if update_response.status_code == 200:
+                    result['displayUrl'] = display_url
+                    print(f"INFO: Updated displayUrl immediately: {display_url}")
+                else:
+                    print(f"WARNING: Failed to update displayUrl immediately: {update_response.text}")
+            
             return result
         else:
             raise Exception(f"Post creation failed: {create_response.text}")
             
     except Exception as e:
-        log_message("ERROR", f"HTTP post creation failed: {e}")
+        print(f"ERROR: HTTP post creation failed: {e}")
         return None
 
 def fetch_data():
@@ -63,9 +77,9 @@ def fetch_data():
 
     if isinstance(data, list) and len(data) > 0 and "error" in data[0]:
         if data[0]["error"] == "no_items":
-            log_message("INFO", "Keine neuen Daten verfügbar.")
+            print("INFO: Keine neuen Daten verfügbar.")
         else:
-            log_message("ERROR", f"Fehler: {data[0]['error']} - {data[0].get('errorDescription', 'Keine Beschreibung')}")
+            print(f"ERROR: Fehler: {data[0]['error']} - {data[0].get('errorDescription', 'Keine Beschreibung')}")
         exit(0)
     else:
         return data
@@ -75,7 +89,7 @@ def save_to_pocketbase(data):
     try:
         # Authenticate with PocketBase user
         pb.collection('users').auth_with_password(os.environ['POCKETBASE_EMAIL'], os.environ['POCKETBASE_PASSWORD'])
-        log_message("INFO", "Authenticated with PocketBase")
+        print("INFO: Authenticated with PocketBase")
         
         for post in data:
             try:
@@ -93,18 +107,18 @@ def save_to_pocketbase(data):
                         
                         if existing_shortcode == current_shortcode:
                             duplicate_found = True
-                            log_message("INFO", f"Found existing post with shortCode: {current_shortcode}")
+                            print(f"INFO: Found existing post with shortCode: {current_shortcode}")
                             break
                     
                     if duplicate_found:
-                        log_message("WARNING", f"Duplicate post skipped: {current_shortcode}")
+                        print(f"WARNING: Duplicate post skipped: {current_shortcode}")
                         continue
                     else:
-                        log_message("INFO", f"New post found: {current_shortcode}")
+                        print(f"INFO: New post found: {current_shortcode}")
                         
                 except Exception as check_error:
-                    log_message("WARNING", f"Could not check for duplicates, proceeding anyway: {check_error}")
-                    log_message("INFO", f"Processing post: {current_shortcode}")
+                    print(f"WARNING: Could not check for duplicates, proceeding anyway: {check_error}")
+                    print(f"INFO: Processing post: {current_shortcode}")
                 
                 # Download image from displayUrl
                 image_data = None
@@ -113,11 +127,11 @@ def save_to_pocketbase(data):
                         response = requests.get(post['displayUrl'], timeout=30)
                         if response.status_code == 200:
                             image_data = BytesIO(response.content)
-                            log_message("INFO", f"Downloaded image for: {post['shortCode']}")
+                            print(f"INFO: Downloaded image for: {post['shortCode']}")
                         else:
-                            log_message("ERROR", f"Failed to download image for {post['shortCode']}: HTTP {response.status_code}")
+                            print(f"ERROR: Failed to download image for {post['shortCode']}: HTTP {response.status_code}")
                     except Exception as e:
-                        log_message("ERROR", f"Error downloading image for {post['shortCode']}: {str(e)}")
+                        print(f"ERROR: Error downloading image for {post['shortCode']}: {str(e)}")
                 
                 # Prepare post data (using camelCase for PocketBase creation)
                 post_data = {
@@ -148,24 +162,29 @@ def save_to_pocketbase(data):
                 
                 # Create post in PocketBase with image file if available
                 if image_data:
-                    log_message("INFO", f"Uploading image for {post['shortCode']}, size: {len(image_data.getvalue())} bytes")
+                    print(f"INFO: Uploading image for {post['shortCode']}, size: {len(image_data.getvalue())} bytes")
                     filename = f"{post.get('shortCode', 'unknown')}.jpg"
                     created_post = create_post_with_image_http(post_data, image_data, filename)
                     if not created_post:
-                        log_message("ERROR", f"Failed to create post with image for {post['shortCode']}")
+                        print(f"ERROR: Failed to create post with image for {post['shortCode']}")
                         continue
                 else:
-                    log_message("WARNING", f"No image data for {post['shortCode']}")
+                    print(f"WARNING: No image data for {post['shortCode']}")
                     created_post = pb.collection('ffp_posts').create(post_data)
-                    log_message("INFO", f"Post created with ID: {created_post.id}")
-                log_message("INFO", f"Saved post: {post['shortCode']}")
+                    print(f"INFO: Post created with ID: {created_post.id}")
+                    
+                    # Update displayUrl for posts without images to use original URL
+                    if post.get('url'):
+                        pb.collection('ffp_posts').update(created_post.id, {'displayUrl': post['url']})
+                        print(f"INFO: Updated displayUrl for post without image: {post['url']}")
+                print(f"INFO: Saved post: {post['shortCode']}")
                 
             except Exception as e:
-                log_message("ERROR", f"Error saving post {post.get('shortCode', 'unknown')}: {str(e)}")
+                print(f"ERROR: Error saving post {post.get('shortCode', 'unknown')}: {str(e)}")
                 continue
                 
     except Exception as e:
-        log_message("ERROR", f"PocketBase authentication or general error: {str(e)}")
+        print(f"ERROR: PocketBase authentication or general error: {str(e)}")
 
 def update_display_urls():
     """Second job: Update all posts with PocketBase file URLs using HTTP"""
@@ -181,14 +200,31 @@ def update_display_urls():
         
         token = auth_response.json()['token']
         headers = {'Authorization': f'Bearer {token}'}
-        log_message("INFO", "Authenticated with PocketBase for URL updates")
+        print("INFO: Authenticated with PocketBase for URL updates")
         
-        # Get all posts using HTTP
-        list_response = requests.get(f'{POCKETBASE_URL}/api/collections/ffp_posts/records', headers=headers)
+        # Get all posts using HTTP - fetch ALL records with pagination
+        list_response = requests.get(f'{POCKETBASE_URL}/api/collections/ffp_posts/records?perPage=500', headers=headers)
+        
         if list_response.status_code != 200:
             raise Exception(f"Failed to fetch posts: {list_response.text}")
         
-        posts = list_response.json()['items']
+        response_data = list_response.json()
+        posts = response_data['items']
+        total_items = response_data.get('totalItems', len(posts))
+        
+        # If there are more posts, fetch all pages
+        if total_items > len(posts):
+            page = 2
+            while len(posts) < total_items:
+                page_response = requests.get(f'{POCKETBASE_URL}/api/collections/ffp_posts/records?perPage=500&page={page}', headers=headers)
+                if page_response.status_code == 200:
+                    page_data = page_response.json()
+                    posts.extend(page_data['items'])
+                    page += 1
+                else:
+                    print(f"WARNING: Failed to fetch page {page}: {page_response.text}")
+                    break
+        
         updated_count = 0
         
         for post in posts:
@@ -197,62 +233,70 @@ def update_display_urls():
                 image_file = post.get('image', '')
                 current_display_url = post.get('displayUrl', '')
                 
-                # Only process posts that have an image file uploaded and don't already have a PocketBase URL
+                # Determine the correct displayUrl based on whether there's an image file
                 if image_file and image_file.strip():
-                    # Generate PocketBase file URL
+                    # Generate PocketBase file URL for posts with images
                     pocketbase_url = f"{POCKETBASE_URL}/api/files/{post['collectionId']}/{post['id']}/{image_file}"
-                    
-                    # Only update if displayUrl is not already a PocketBase URL
-                    if not current_display_url.startswith(POCKETBASE_URL):
-                        # Update the displayUrl field
-                        update_data = {'displayUrl': pocketbase_url}
-                        update_response = requests.patch(
-                            f"{POCKETBASE_URL}/api/collections/ffp_posts/records/{post['id']}",
-                            headers=headers,
-                            json=update_data
-                        )
-                        
-                        if update_response.status_code == 200:
-                            log_message("INFO", f"Updated displayUrl for {short_code}: {pocketbase_url}")
-                            updated_count += 1
-                        else:
-                            log_message("ERROR", f"Failed to update {short_code}: {update_response.text}")
-                    else:
-                        log_message("INFO", f"DisplayUrl already updated for {short_code}")
                 else:
-                    log_message("WARNING", f"No image file for post: {short_code}")
+                    # For posts without images, use the original URL from the post data
+                    pocketbase_url = post.get('url', '')
+                    
+                # Only update if displayUrl is not already correct
+                if current_display_url != pocketbase_url:
+                    # Update the displayUrl field
+                    update_data = {'displayUrl': pocketbase_url}
+                    update_response = requests.patch(
+                        f"{POCKETBASE_URL}/api/collections/ffp_posts/records/{post['id']}",
+                        headers=headers,
+                        json=update_data
+                    )
+                    
+                    if update_response.status_code == 200:
+                        if image_file and image_file.strip():
+                            print(f"INFO: Updated displayUrl for {short_code}: {pocketbase_url}")
+                        else:
+                            print(f"INFO: Updated displayUrl for {short_code} (no image): {pocketbase_url}")
+                        updated_count += 1
+                    else:
+                        print(f"ERROR: Failed to update {short_code}: {update_response.text}")
+                else:
+                    print(f"INFO: DisplayUrl already correct for {short_code}")
             except Exception as update_error:
-                log_message("ERROR", f"Error updating URL for {short_code}: {update_error}")
+                print(f"ERROR: Error updating URL for {short_code}: {update_error}")
                 continue
         
-        log_message("INFO", f"Updated {updated_count} post URLs")
+        print(f"INFO: Updated {updated_count} post URLs")
         return True
         
     except Exception as e:
-        log_message("ERROR", f"Error updating display URLs: {str(e)}")
+        print(f"ERROR: Error updating display URLs: {str(e)}")
         return False
 
 def main():
-    log_message("INFO", "Starting Instagram posts sync...")
+    print("INFO: Starting Instagram posts sync...")
     
     # Step 1: Fetch and save posts with images
-    log_message("INFO", "Fetching data from Instagram...")
+    print("INFO: Fetching data from Instagram...")
     data = fetch_data()
     if data:
-        log_message("INFO", "Data fetched successfully.")
+        print("INFO: Data fetched successfully.")
         save_to_pocketbase(data)
-        log_message("INFO", "Posts saved to PocketBase.")
+        print("INFO: Posts saved to PocketBase.")
         
-        # Step 2: Update displayUrls with PocketBase file URLs
-        log_message("INFO", "Updating displayUrls with PocketBase file URLs...")
+        # Step 2: Wait briefly for S3 uploads to complete, then update any remaining displayUrls
+        print("INFO: Waiting 10 seconds for S3 uploads to complete...")
+        import time
+        time.sleep(10)
+        
+        print("INFO: Updating any remaining displayUrls with PocketBase file URLs...")
         url_success = update_display_urls()
         
         if url_success:
-            log_message("INFO", "Complete posts sync finished successfully.")
+            print("INFO: Complete posts sync finished successfully.")
         else:
-            log_message("WARNING", "Posts saved but URL updates failed.")
+            print("WARNING: Posts saved but URL updates failed.")
     else:
-        log_message("INFO", "No data to save.")
+        print("INFO: No data to save.")
 
 if __name__ == "__main__":
     main()
