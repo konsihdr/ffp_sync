@@ -13,8 +13,8 @@ POCKETBASE_URL = "https://base.hdr-it.de"
 pb = PocketBase(POCKETBASE_URL)
 
 
-def create_post_with_image_http(post_data, image_data, filename):
-    """Create post with image using direct HTTP request (workaround for SDK issue)"""
+def create_post_with_media_http(post_data, media_data, filename, media_type='image'):
+    """Create post with media (image or video) using direct HTTP request (workaround for SDK issue)"""
     try:
         # Get auth token from current PocketBase session
         auth_response = requests.post(f'{POCKETBASE_URL}/api/collections/users/auth-with-password', json={
@@ -29,8 +29,11 @@ def create_post_with_image_http(post_data, image_data, filename):
         headers = {'Authorization': f'Bearer {token}'}
         
         # Prepare files for upload
-        image_data.seek(0)
-        files = {'image': (filename, image_data, 'image/jpeg')}
+        media_data.seek(0)
+        if media_type == 'video':
+            files = {'video': (filename, media_data, 'video/mp4')}
+        else:
+            files = {'image': (filename, media_data, 'image/jpeg')}
         
         # Create post with image
         create_response = requests.post(
@@ -42,11 +45,11 @@ def create_post_with_image_http(post_data, image_data, filename):
         
         if create_response.status_code == 200:
             result = create_response.json()
-            image_filename = result.get('image', '')
-                        
+            media_filename = result.get('video' if media_type == 'video' else 'image', '')
+
             # Immediately update displayUrl with the correct PocketBase file URL
-            if image_filename:
-                display_url = f"{POCKETBASE_URL}/api/files/{result['collectionId']}/{result['id']}/{image_filename}"
+            if media_filename:
+                display_url = f"{POCKETBASE_URL}/api/files/{result['collectionId']}/{result['id']}/{media_filename}"
                 update_data = {'displayUrl': display_url}
                 update_response = requests.patch(
                     f"{POCKETBASE_URL}/api/collections/ffp_posts/records/{result['id']}",
@@ -120,8 +123,11 @@ def save_to_pocketbase(data):
                     print(f"WARNING: Could not check for duplicates, proceeding anyway: {check_error}")
                     print(f"INFO: Processing post: {current_shortcode}")
                 
-                # Download image from displayUrl
+                # Download media (image or video) from displayUrl and videoUrl
                 image_data = None
+                video_data = None
+
+                # Download image if displayUrl exists
                 if post.get('displayUrl'):
                     try:
                         response = requests.get(post['displayUrl'], timeout=30)
@@ -132,6 +138,18 @@ def save_to_pocketbase(data):
                             print(f"ERROR: Failed to download image for {post['shortCode']}: HTTP {response.status_code}")
                     except Exception as e:
                         print(f"ERROR: Error downloading image for {post['shortCode']}: {str(e)}")
+
+                # Download video if videoUrl exists
+                if post.get('videoUrl'):
+                    try:
+                        response = requests.get(post['videoUrl'], timeout=60)  # Longer timeout for videos
+                        if response.status_code == 200:
+                            video_data = BytesIO(response.content)
+                            print(f"INFO: Downloaded video for: {post['shortCode']}")
+                        else:
+                            print(f"ERROR: Failed to download video for {post['shortCode']}: HTTP {response.status_code}")
+                    except Exception as e:
+                        print(f"ERROR: Error downloading video for {post['shortCode']}: {str(e)}")
                 
                 # Prepare post data (using camelCase for PocketBase creation)
                 post_data = {
@@ -160,23 +178,33 @@ def save_to_pocketbase(data):
                         from datetime import datetime
                         post_data['postDate'] = datetime.now().strftime('%Y-%m-%d')
                 
-                # Create post in PocketBase with image file if available
-                if image_data:
+                # Create post in PocketBase with media files if available
+                created_post = None
+
+                # Priority: video first, then image, then no media
+                if video_data:
+                    print(f"INFO: Uploading video for {post['shortCode']}, size: {len(video_data.getvalue())} bytes")
+                    filename = f"{post.get('shortCode', 'unknown')}.mp4"
+                    created_post = create_post_with_media_http(post_data, video_data, filename, 'video')
+                    if not created_post:
+                        print(f"ERROR: Failed to create post with video for {post['shortCode']}")
+                        continue
+                elif image_data:
                     print(f"INFO: Uploading image for {post['shortCode']}, size: {len(image_data.getvalue())} bytes")
                     filename = f"{post.get('shortCode', 'unknown')}.jpg"
-                    created_post = create_post_with_image_http(post_data, image_data, filename)
+                    created_post = create_post_with_media_http(post_data, image_data, filename, 'image')
                     if not created_post:
                         print(f"ERROR: Failed to create post with image for {post['shortCode']}")
                         continue
                 else:
-                    print(f"WARNING: No image data for {post['shortCode']}")
+                    print(f"WARNING: No media data for {post['shortCode']}")
                     created_post = pb.collection('ffp_posts').create(post_data)
                     print(f"INFO: Post created with ID: {created_post.id}")
-                    
-                    # Update displayUrl for posts without images to use original URL
+
+                    # Update displayUrl for posts without media to use original URL
                     if post.get('url'):
                         pb.collection('ffp_posts').update(created_post.id, {'displayUrl': post['url']})
-                        print(f"INFO: Updated displayUrl for post without image: {post['url']}")
+                        print(f"INFO: Updated displayUrl for post without media: {post['url']}")
                 print(f"INFO: Saved post: {post['shortCode']}")
                 
             except Exception as e:
@@ -231,14 +259,18 @@ def update_display_urls():
             try:
                 short_code = post.get('shortCode', 'unknown')
                 image_file = post.get('image', '')
+                video_file = post.get('video', '')
                 current_display_url = post.get('displayUrl', '')
-                
-                # Determine the correct displayUrl based on whether there's an image file
-                if image_file and image_file.strip():
+
+                # Determine the correct displayUrl based on whether there's a video or image file
+                if video_file and video_file.strip():
+                    # Generate PocketBase file URL for posts with videos
+                    pocketbase_url = f"{POCKETBASE_URL}/api/files/{post['collectionId']}/{post['id']}/{video_file}"
+                elif image_file and image_file.strip():
                     # Generate PocketBase file URL for posts with images
                     pocketbase_url = f"{POCKETBASE_URL}/api/files/{post['collectionId']}/{post['id']}/{image_file}"
                 else:
-                    # For posts without images, use the original URL from the post data
+                    # For posts without media, use the original URL from the post data
                     pocketbase_url = post.get('url', '')
                     
                 # Only update if displayUrl is not already correct
@@ -252,10 +284,12 @@ def update_display_urls():
                     )
                     
                     if update_response.status_code == 200:
-                        if image_file and image_file.strip():
-                            print(f"INFO: Updated displayUrl for {short_code}: {pocketbase_url}")
+                        if video_file and video_file.strip():
+                            print(f"INFO: Updated displayUrl for {short_code} (video): {pocketbase_url}")
+                        elif image_file and image_file.strip():
+                            print(f"INFO: Updated displayUrl for {short_code} (image): {pocketbase_url}")
                         else:
-                            print(f"INFO: Updated displayUrl for {short_code} (no image): {pocketbase_url}")
+                            print(f"INFO: Updated displayUrl for {short_code} (no media): {pocketbase_url}")
                         updated_count += 1
                     else:
                         print(f"ERROR: Failed to update {short_code}: {update_response.text}")
