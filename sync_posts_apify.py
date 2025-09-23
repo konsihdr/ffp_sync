@@ -21,52 +21,87 @@ def create_post_with_media_http(post_data, media_data, filename, media_type='ima
             'identity': os.environ['POCKETBASE_EMAIL'],
             'password': os.environ['POCKETBASE_PASSWORD']
         })
-        
+
         if auth_response.status_code != 200:
             raise Exception(f"Authentication failed: {auth_response.text}")
-        
+
         token = auth_response.json()['token']
         headers = {'Authorization': f'Bearer {token}'}
-        
+
+        # Check file size
+        media_data.seek(0, 2)  # Seek to end
+        file_size = media_data.tell()
+        media_data.seek(0)  # Reset to beginning
+
+        # File size limits (configurable)
+        MAX_VIDEO_SIZE = 50 * 1024 * 1024  # 50MB
+        MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
+
+        if media_type == 'video' and file_size > MAX_VIDEO_SIZE:
+            raise Exception(f"Video file too large: {file_size} bytes (max: {MAX_VIDEO_SIZE} bytes)")
+        elif media_type == 'image' and file_size > MAX_IMAGE_SIZE:
+            raise Exception(f"Image file too large: {file_size} bytes (max: {MAX_IMAGE_SIZE} bytes)")
+
+        print(f"INFO: Uploading {media_type} file: {filename} ({file_size} bytes)")
+
         # Prepare files for upload
-        media_data.seek(0)
         if media_type == 'video':
             files = {'video': (filename, media_data, 'video/mp4')}
         else:
             files = {'image': (filename, media_data, 'image/jpeg')}
-        
-        # Create post with image
+
+        # Create post with media
+        print(f"INFO: Creating post with {media_type} via HTTP...")
         create_response = requests.post(
             f'{POCKETBASE_URL}/api/collections/ffp_posts/records',
             headers=headers,
             data=post_data,
-            files=files
+            files=files,
+            timeout=120  # 2 minute timeout for large files
         )
-        
+
+        print(f"INFO: HTTP Response Status: {create_response.status_code}")
+
         if create_response.status_code == 200:
             result = create_response.json()
-            media_filename = result.get('video' if media_type == 'video' else 'image', '')
+            print(f"INFO: Post created successfully. ID: {result.get('id')}")
+
+            # Verify that the media field was actually set
+            expected_field = 'video' if media_type == 'video' else 'image'
+            media_filename = result.get(expected_field, '')
+
+            print(f"INFO: Checking {expected_field} field in response...")
+            print(f"INFO: {expected_field} field value: '{media_filename}'")
+
+            if not media_filename:
+                print(f"ERROR: {expected_field} field is empty in response! Upload may have failed silently.")
+                print(f"DEBUG: Full response data: {result}")
+                raise Exception(f"{media_type} upload failed: {expected_field} field is empty")
 
             # Immediately update displayUrl with the correct PocketBase file URL
-            if media_filename:
-                display_url = f"{POCKETBASE_URL}/api/files/{result['collectionId']}/{result['id']}/{media_filename}"
-                update_data = {'displayUrl': display_url}
-                update_response = requests.patch(
-                    f"{POCKETBASE_URL}/api/collections/ffp_posts/records/{result['id']}",
-                    headers=headers,
-                    json=update_data
-                )
-                
-                if update_response.status_code == 200:
-                    result['displayUrl'] = display_url
-                    print(f"INFO: Updated displayUrl immediately: {display_url}")
-                else:
-                    print(f"WARNING: Failed to update displayUrl immediately: {update_response.text}")
-            
+            display_url = f"{POCKETBASE_URL}/api/files/{result['collectionId']}/{result['id']}/{media_filename}"
+            print(f"INFO: Generated display URL: {display_url}")
+
+            update_data = {'displayUrl': display_url}
+            update_response = requests.patch(
+                f"{POCKETBASE_URL}/api/collections/ffp_posts/records/{result['id']}",
+                headers=headers,
+                json=update_data
+            )
+
+            if update_response.status_code == 200:
+                result['displayUrl'] = display_url
+                print(f"INFO: Updated displayUrl successfully: {display_url}")
+            else:
+                print(f"WARNING: Failed to update displayUrl: {update_response.status_code} - {update_response.text}")
+
             return result
         else:
-            raise Exception(f"Post creation failed: {create_response.text}")
-            
+            error_text = create_response.text
+            print(f"ERROR: Post creation failed with status {create_response.status_code}")
+            print(f"ERROR: Response body: {error_text}")
+            raise Exception(f"Post creation failed: HTTP {create_response.status_code} - {error_text}")
+
     except Exception as e:
         print(f"ERROR: HTTP post creation failed: {e}")
         return None
@@ -190,30 +225,48 @@ def save_to_pocketbase(data):
                 # Create post in PocketBase with media files if available
                 created_post = None
 
-                # Priority: video first, then image, then no media
+                # Strategy: Try video first, fallback to image, then no media
                 if video_data:
-                    print(f"INFO: Uploading video for {post['shortCode']}, size: {len(video_data.getvalue())} bytes")
+                    print(f"INFO: Attempting video upload for {post['shortCode']}")
                     filename = f"{post.get('shortCode', 'unknown')}.mp4"
                     created_post = create_post_with_media_http(post_data, video_data, filename, 'video')
+
                     if not created_post:
-                        print(f"ERROR: Failed to create post with video for {post['shortCode']}")
-                        continue
+                        print(f"WARNING: Video upload failed for {post['shortCode']}, trying image fallback...")
+                        # Fallback to image if video fails and image is available
+                        if image_data:
+                            print(f"INFO: Falling back to image upload for {post['shortCode']}")
+                            filename = f"{post.get('shortCode', 'unknown')}.jpg"
+                            created_post = create_post_with_media_http(post_data, image_data, filename, 'image')
+                            if not created_post:
+                                print(f"ERROR: Both video and image upload failed for {post['shortCode']}, creating post without media")
+                        else:
+                            print(f"ERROR: Video upload failed and no image available for {post['shortCode']}")
+                    else:
+                        print(f"INFO: Video upload successful for {post['shortCode']}")
+
                 elif image_data:
-                    print(f"INFO: Uploading image for {post['shortCode']}, size: {len(image_data.getvalue())} bytes")
+                    print(f"INFO: Uploading image for {post['shortCode']} (no video available)")
                     filename = f"{post.get('shortCode', 'unknown')}.jpg"
                     created_post = create_post_with_media_http(post_data, image_data, filename, 'image')
                     if not created_post:
-                        print(f"ERROR: Failed to create post with image for {post['shortCode']}")
-                        continue
-                else:
-                    print(f"WARNING: No media data for {post['shortCode']}")
-                    created_post = pb.collection('ffp_posts').create(post_data)
-                    print(f"INFO: Post created with ID: {created_post.id}")
+                        print(f"ERROR: Image upload failed for {post['shortCode']}")
 
-                    # Update displayUrl for posts without media to use original URL
-                    if post.get('url'):
-                        pb.collection('ffp_posts').update(created_post.id, {'displayUrl': post['url']})
-                        print(f"INFO: Updated displayUrl for post without media: {post['url']}")
+                # Final fallback: create post without media if all uploads failed
+                if not created_post:
+                    print(f"WARNING: Creating post without media for {post['shortCode']}")
+                    try:
+                        created_post = pb.collection('ffp_posts').create(post_data)
+                        print(f"INFO: Post created without media. ID: {created_post.id}")
+
+                        # Update displayUrl for posts without media to use original URL
+                        if post.get('url'):
+                            pb.collection('ffp_posts').update(created_post.id, {'displayUrl': post['url']})
+                            print(f"INFO: Updated displayUrl for post without media: {post['url']}")
+                    except Exception as fallback_error:
+                        print(f"ERROR: Failed to create post even without media for {post['shortCode']}: {fallback_error}")
+                        continue
+
                 print(f"INFO: Saved post: {post['shortCode']}")
                 
             except Exception as e:
