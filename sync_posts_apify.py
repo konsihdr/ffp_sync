@@ -154,7 +154,7 @@ def save_to_pocketbase(data):
                 # Prepare post data (using camelCase for PocketBase creation)
                 post_data = {
                     'shortCode': post.get('shortCode', ''),
-                    'alt': post.get('alt', ''),
+                    'alt': post.get('alt') or '',  # Handle None values
                     'caption': post.get('caption', ''),
                     'url': post.get('url', ''),
                     'displayUrl': post.get('displayUrl', '')  # Will be replaced with PocketBase URL
@@ -164,17 +164,26 @@ def save_to_pocketbase(data):
                 timestamp = post.get('timestamp', '')
                 if timestamp:
                     try:
+                        # Handle ISO format like "2025-09-21T10:43:59.000Z"
+                        if 'T' in timestamp and ('Z' in timestamp or '+' in timestamp):
+                            from datetime import datetime
+                            # Parse ISO format timestamp
+                            if timestamp.endswith('Z'):
+                                date_obj = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                            else:
+                                date_obj = datetime.fromisoformat(timestamp)
+                            post_data['postDate'] = date_obj.strftime('%Y-%m-%d')
                         # If timestamp is a string like "2024-01-01", use as-is
-                        # If it's a Unix timestamp, convert it
-                        if timestamp.isdigit():
+                        elif timestamp.isdigit():
                             from datetime import datetime
                             date_obj = datetime.fromtimestamp(int(timestamp))
                             post_data['postDate'] = date_obj.strftime('%Y-%m-%d')
                         else:
                             # Assume it's already in YYYY-MM-DD format
                             post_data['postDate'] = timestamp[:10]  # Take first 10 chars
-                    except:
+                    except Exception as e:
                         # If conversion fails, use current date
+                        print(f"WARNING: Could not parse timestamp '{timestamp}': {e}")
                         from datetime import datetime
                         post_data['postDate'] = datetime.now().strftime('%Y-%m-%d')
                 
