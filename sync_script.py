@@ -64,7 +64,7 @@ def sync_events_to_pocketbase():
             summary = event['summary']
             start = event['start']
             end = event['end']
-            is_youth_event = 'Jugenduebung' in summary
+            is_youth_event = 'Jugend' in summary
 
             # Check if event with same summary exists
             existing = existing_by_summary.get(summary)
